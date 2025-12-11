@@ -1,0 +1,129 @@
+## load packages
+library(ggplot2)
+library(Seurat) 
+library(dplyr)
+library(sctransform)
+library(cowplot)
+library(BRETIGEA)
+library(knitr)
+library(stringr)
+library(patchwork)
+library(tidyr)
+library(magrittr)
+
+## data preparation
+# Define the base path
+base_path <- "/Volumes/Huang-Lab/Yaqiao/MinJoo/"
+
+# Define sample names
+sample_names <- c("PE3_249", "PE3_278", "PE3_287", "PE3_288", "PE4_1068", "PE4_1236", "PE4_1271", "PE4_274", "PNSE4_227", "PNSE4_233", "PNSE4_234", "PNSE4_244")
+
+# Create an empty list to store Seurat objects
+seurat_list <- list()
+# Loop through each sample
+for (sample in sample_names) {
+  data_dir <- file.path(base_path, sample, "outs", "filtered_feature_bc_matrix")
+  counts <- Read10X(data.dir = data_dir)
+  seurat_obj <- CreateSeuratObject(counts = counts, project = sample)
+  seurat_list[[sample]] <- seurat_obj
+}
+
+PE3 <- merge(x = seurat_list$PE3_249, y = list(seurat_list$PE3_278, seurat_list$PE3_287, seurat_list$PE3_288), add.cell.ids = c("PE3_249", "PE3_278", "PE3_287", "PE3_288"))
+PE3$group <- "PE3"
+
+PE4 <- merge(x = seurat_list$PE4_1068, y = list(seurat_list$PE4_1236, seurat_list$PE4_1271, seurat_list$PE4_274), add.cell.ids = c("PE4_1068", "PE4_1236", "PE4_1271", "PE4_274"))
+PE4$group <- "PE4"
+
+PNSE4 <- merge(x = seurat_list$PNSE4_227, y = list(seurat_list$PNSE4_233, seurat_list$PNSE4_234, seurat_list$PNSE4_244), add.cell.ids = c("PNSE4_227", "PNSE4_233", "PNSE4_234", "PNSE4_244"))
+PNSE4$group <- "PNSE4"
+
+# Define sample names
+sample_names <- c("PE4SYN_1226", "PE4SYN_1235", "PE4SYN_1267", "PE4SYN_1272")
+
+# Create an empty list to store Seurat objects
+seurat_list <- list()
+# Loop through each sample
+for (sample in sample_names) {
+  data_dir <- file.path(base_path, sample, "outs", "filtered_feature_bc_matrix")
+  counts <- Read10X(data.dir = data_dir)
+  seurat_obj <- CreateSeuratObject(counts = counts, project = sample)
+  seurat_list[[sample]] <- seurat_obj
+}
+
+PE4SYN <- merge(x = seurat_list$PE4SYN_1226, y = list(seurat_list$PE4SYN_1235, seurat_list$PE4SYN_1267, seurat_list$PE4SYN_1272), add.cell.ids = c("PE4SYN_1226", "PE4SYN_1235", "PE4SYN_1267", "PE4SYN_1272"))
+PE4SYN$group <- "PE4SYN"
+
+
+## Create Seurat object
+
+obj <- merge(PE4, y= c(PE3, PNSE4, PE4SYN)) 
+genename <-as.data.frame(row.names(obj))
+
+
+
+## QC: remove poor quality cells and rarely expressed features
+
+mzl <- obj
+# remove poor quality cells and low expressed features
+mzl$log10GenesPerUMI <- log10(mzl$nFeature_RNA) / log10(mzl$nCount_RNA)
+# Compute percent mito ratio
+mzl$mitoRatio <- PercentageFeatureSet(object = mzl, pattern = "^mt-")
+
+# Create metadata dataframe
+metadata <- mzl@meta.data
+# Add cell IDs to metadata
+metadata$cells <- rownames(metadata)
+
+# Rename columns
+metadata <- metadata %>%
+  dplyr::rename(seq_folder = orig.ident,
+                nUMI = nCount_RNA,
+                nGene = nFeature_RNA)
+
+mzl<- subset(x = mzl, subset= (nCount_RNA >= 500) & 
+               (nFeature_RNA >= 200) & 
+               (log10GenesPerUMI > 0.85) & 
+               (mitoRatio < 0.25))
+
+
+counts <- GetAssayData(object = mzl, slot = "counts")
+
+# Output a logical vector for every gene on whether the more than zero counts per cell
+nonzero <- counts > 0
+
+# Sums all TRUE values and returns TRUE if more than 10 TRUE values per gene
+keep_genes <- Matrix::rowSums(nonzero) >= 10 
+
+# Only keeping those genes expressed in more than 10 cells
+filtered_counts <- counts[keep_genes, ]
+mzl <- CreateSeuratObject(filtered_counts, meta.data = mzl@meta.data)
+
+# Visualize QC metrics as a violin plot
+obj <- mzl
+
+rm(list = setdiff(ls(), c("obj")))
+
+
+
+
+## Scale and normalize data
+options(future.globals.maxSize = 60 * 1024^3)  
+# note that you can chain multiple commands together with %>%
+obj <- SCTransform(obj) %>%
+    RunPCA() %>%
+    FindNeighbors(dims = 1:15) %>%
+    FindClusters(resolution = 0.7) %>%
+    RunUMAP(dims = 1:15)
+DimPlot(obj, reduction = "umap", label=TRUE, group.by = "seurat_clusters",  raster=FALSE)
+obj$Seurat_Clusters <- as.numeric(obj$seurat_clusters)
+
+## find all marker genes for all clusters
+Idents(obj) <- "Seurat_Clusters"
+MarkersRes <- FindAllMarkers(obj, 
+                             assay = "SCT", 
+                             slot = "data", 
+                             test.use = "wilcox",
+                             only.pos = TRUE,
+                             min.pct = 0.25,
+                             logfc.threshold = 0.25)
+
