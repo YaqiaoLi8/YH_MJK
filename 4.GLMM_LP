@@ -1,0 +1,176 @@
+
+## get cell proportion per sample per cluster  
+library(dplyr)
+library(tidyr)
+library(lme4)
+require(magrittr)
+library(Seurat)
+library(ggplot2)
+
+obj$Seurat_Clusters <- as.numeric(obj$seurat_clusters)
+all_metadata <- obj[[]]
+
+# Get all unique combinations of samples and clusters
+all_combinations <- expand_grid(
+  orig.ident = unique(all_metadata$orig.ident),
+  Seurat_Clusters = unique(all_metadata$Seurat_Clusters)
+)
+
+# Compute counts per sample and cluster
+counts_df <- all_metadata %>%
+  group_by(orig.ident) %>%
+  mutate(total_numbers_of_cells_per_sample = n()) %>%
+  group_by(orig.ident, Seurat_Clusters, .add = FALSE) %>%
+  summarise(number_of_cells_per_sample_in_cluster = n(), .groups = "drop") %>%
+  distinct()
+
+# Join with full combinations and fill in missing values
+smp_cluster_counts <- all_combinations %>%
+  left_join(counts_df, by = c("orig.ident", "Seurat_Clusters")) %>%
+  left_join(
+    all_metadata %>%
+      group_by(orig.ident, group) %>%
+      summarise(total_numbers_of_cells_per_sample = n(), .groups = "drop") %>%
+      distinct(),
+    by = "orig.ident"
+  ) %>%
+  mutate(
+    number_of_cells_per_sample_in_cluster = ifelse(is.na(number_of_cells_per_sample_in_cluster), 1, number_of_cells_per_sample_in_cluster)
+  )
+
+colnames(smp_cluster_counts)[c (1, 4, 2)] <- c("sample_id","animal_model","cluster_id")
+smp_cluster_counts <- smp_cluster_counts[order(smp_cluster_counts$cluster_id),]
+
+write.csv(smp_cluster_counts, "counts_per_sample_per_cluster.csv")
+
+
+
+### GLMM_histopathology
+## Association between proportion of cell types and histopathological parameters (generalized linear mixed-effects models)
+
+## input histology data
+setwd(dir = "~/Downloads/Jessie_MinJoo/MinJoo/MJK_NeuronE/")
+histop_HMGB1i <- read.csv(file = "histology.csv")
+## input count data
+counts <- read.csv("counts_per_sample_per_cluster.csv", header = T)
+pheno <- unique(counts[, c("sample_id", "animal_model", "total_numbers_of_cells_per_sample")])
+Clusters <- unique(counts$cluster_id)
+colnames(histop_HMGB1i)[2] <- "sample_id"
+histopheno <- merge(histop_HMGB1i, pheno, by="sample_id") 
+head(histopheno)
+dim(histopheno)
+#log transformed the histo variables, # number of col - 2
+histopheno[,3:11]<- log(histopheno[,3:11])
+
+##input function
+##function to estimate the change in the odds of cluster membership from the E4 to the other genotypes
+estimateCellStateChange <- function(k, counts, histopheno) {
+  require(lme4)
+  require(gdata)
+  print(paste("Cluster", k))
+  cluster_counts <- counts %>% 
+    filter(cluster_id == k)
+  cluster_counts %<>% merge(., histopheno, all.y=TRUE)
+  cluster_counts$number_of_cells_per_sample_in_cluster[is.na(cluster_counts$number_of_cells_per_sample_in_cluster)] <- 0
+  
+  cluster_counts %<>% arrange(animal_model) %>% mutate(proportion=number_of_cells_per_sample_in_cluster/total_numbers_of_cells_per_sample)
+
+
+
+  colnames(cluster_counts)[8:16] <- c("BODIPY_DG", "BODIPY_Iba1", "BODIPY_GFAP" , "PLIN2_NeuN", "PLIN2_Iba1", "BODIPY.C11_green_Iba1",  "BODIPY.C11_green_GFAP",  "BODIPY.C11_red_Iba1", "BODIPY.C11_red_GFAP")
+  cluster_counts %<>% mutate(animal_model = as.factor(animal_model))
+  cluster_counts$animal_model <- relevel(cluster_counts$animal_model, ref="PE4")
+ 
+TempRes<-NULL
+
+for (ph in 8:(ncol(cluster_counts)-1)){
+
+ 
+    formula1=as.formula(paste0("cbind(number_of_cells_per_sample_in_cluster, ",
+                             "total_numbers_of_cells_per_sample - ",
+                             "number_of_cells_per_sample_in_cluster) ~ ",
+                             "(1 | animal_model/sample_id) + cluster_counts[,ph] "))
+  glmerFit <- glmer(formula1 ,data = cluster_counts, family = binomial, nAGQ=1)
+  
+  sglmerFit1 <- summary(glmerFit)
+  TempRes1 <- (sglmerFit1$coefficients[-1,])
+  
+  #print(TempRes1)
+      TempRes <- rbind(TempRes, TempRes1)
+
+             
+}  
+
+
+print(TempRes)
+
+}
+
+##
+#run the log odds function for all clusters for each histopathological variable
+ClusterRes <- sapply(Clusters, estimateCellStateChange, counts, histopheno)
+
+#reformat the results table
+ClusterRes %<>% 
+  as.data.frame() %>% 
+  t() 
+row.names(ClusterRes) <-  paste0("Cluster", Clusters)
+ClusterRes <- data.frame(ClusterRes)
+
+
+colnames(ClusterRes)[c(1:18, 28:36)] <- c(
+                      "logOddsRatio_for_unit_BODIPY_DG",
+                               "logOddsRatio_for_unit_BODIPY_Iba1",
+                               "logOddsRatio_for_unit_BODIPY_GFAP",
+                                "logOddsRatio_for_unit_PLIN2_NeuN",
+                                "logOddsRatio_for_unit_PLIN2_Iba1",
+                                 "logOddsRatio_for_unit_BODIPY.C11_green_Iba1",
+                               "logOddsRatio_for_unit_BODIPY.C11_green_GFAP",
+                               "logOddsRatio_for_unit_BODIPY.C11_red_Iba1",
+                               "logOddsRatio_for_unit_BODIPY.C11_red_GFAP",
+                      "StdErr_for_unit_BODIPY_DG",
+                               "StdErr_for_unit_BODIPY_Iba1",
+                               "StdErr_for_unit_BODIPY_GFAP",
+                                "StdErr_for_unit_PLIN2_NeuN",
+                                "StdErr_for_unit_PLIN2_Iba1",
+                                 "StdErr_for_unit_BODIPY.C11_green_Iba1",
+                               "StdErr_for_unit_BODIPY.C11_green_GFAP",
+                               "StdErr_for_unit_BODIPY.C11_red_Iba1",
+                               "StdErr_for_unit_BODIPY.C11_red_GFAP",
+                     "pvalue_for_unit_BODIPY_DG",
+                               "pvalue_for_unit_BODIPY_Iba1",
+                               "pvalue_for_unit_BODIPY_GFAP",
+                                "pvalue_for_unit_PLIN2_NeuN",
+                                "pvalue_for_unit_PLIN2_Iba1",
+                                 "pvalue_for_unit_BODIPY.C11_green_Iba1",
+                               "pvalue_for_unit_BODIPY.C11_green_GFAP",
+                               "pvalue_for_unit_BODIPY.C11_red_Iba1",
+                               "pvalue_for_unit_BODIPY.C11_red_GFAP")
+
+
+                                
+# make a vector of all p-values and p.adjust for all p-values together
+p.adjust_all <- p.adjust(c(ClusterRes$pvalue_for_unit_BODIPY_DG, 
+                           ClusterRes$pvalue_for_unit_BODIPY_Iba1,
+                           ClusterRes$pvalue_for_unit_BODIPY_GFAP,
+                           ClusterRes$pvalue_for_unit_PLIN2_NeuN, 
+                           ClusterRes$pvalue_for_unit_PLIN2_Iba1,
+                           ClusterRes$pvalue_for_unit_BODIPY.C11_green_Iba1,
+                           ClusterRes$pvalue_for_unit_BODIPY.C11_green_GFAP, 
+                           ClusterRes$pvalue_for_unit_BODIPY.C11_red_Iba1,
+                           ClusterRes$pvalue_for_unit_BODIPY.C11_red_GFAP), method = "BH")
+
+##perform multiple-testing correction
+ClusterRes[,"p.adjust_for_unit_BODIPY_DG"] = p.adjust_all[1:nrow(ClusterRes)]
+ClusterRes[,"p.adjust_for_unit_BODIPY_Iba1"] = p.adjust_all[(nrow(ClusterRes) + 1):(nrow(ClusterRes)*2)]
+ClusterRes[,"p.adjust_for_unit_BODIPY_GFAP"] = p.adjust_all[(nrow(ClusterRes)*2 + 1):(nrow(ClusterRes)*3)]
+ClusterRes[,"p.adjust_for_unit_PLIN2_NeuN"] = p.adjust_all[(nrow(ClusterRes)*3 + 1):(nrow(ClusterRes)*4)]
+ClusterRes[,"p.adjust_for_unit_PLIN2_Iba1"] = p.adjust_all[(nrow(ClusterRes)*4 + 1):(nrow(ClusterRes)*5)]
+ClusterRes[,"p.adjust_for_unit_BODIPY.C11_green_Iba1"] = p.adjust_all[(nrow(ClusterRes)*5 + 1):(nrow(ClusterRes)*6)]
+ClusterRes[,"p.adjust_for_unit_BODIPY.C11_green_GFAP"] = p.adjust_all[(nrow(ClusterRes)*6 + 1):(nrow(ClusterRes)*7)]
+ClusterRes[,"p.adjust_for_unit_BODIPY.C11_red_Iba1"] = p.adjust_all[(nrow(ClusterRes)*7 + 1):(nrow(ClusterRes)*8)]
+ClusterRes[,"p.adjust_for_unit_BODIPY.C11_red_GFAP"] = p.adjust_all[(nrow(ClusterRes)*8 + 1):length(p.adjust_all)]
+
+ClusterRes <- ClusterRes[,!(colnames(ClusterRes) %in% c("X19","X20","X21","X22","X23","X24", "X25","X26","X27"))]
+
+write.csv(t(ClusterRes), file = "MJK_NeuronE/log_odds_ratio_new_method_per_unit_per_histopathology_per_cluster.csv")
