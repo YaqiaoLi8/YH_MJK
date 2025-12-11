@@ -1,0 +1,16 @@
+
+###subcluster microglia and astrocytes
+Idents(obj) <- "cluster"
+#obj <- subset(obj, ident= c("10 Microglia", "14 Microglia"))
+obj <- subset(obj, ident= c("15 Astrocytes", "24 Astrocytes"))
+#options(future.globals.maxSize = 60 * 1024^3)  
+# note that you can chain multiple commands together with %>%
+obj <- SCTransform(obj) %>%
+    RunPCA() %>%
+    FindNeighbors(dims = 1:15) %>%
+    FindClusters(resolution = 0.9) %>%
+    RunUMAP(dims = 1:15)
+
+obj$Seurat_Clusters <- as.numeric(obj$seurat_clusters)
+table(obj$Seurat_Clusters)
+DimPlot(obj, reduction = "umap", label=TRUE, repel = TRUE, group.by = "Seurat_Clusters",  raster=FALSE)
