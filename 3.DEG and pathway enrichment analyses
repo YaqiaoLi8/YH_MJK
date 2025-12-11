@@ -1,0 +1,169 @@
+
+
+## DEG analysis
+#subset obj to remove hybrid and negative cells
+Idents(obj) <- "cell_type_gen"
+obj <- subset(obj, ident= c("hybrid", "negative"), invert = TRUE)
+
+
+celltypes <- c("4 Ex. Neurons (CA1)", "7 Oligodendrocytes", "11 Ex. Neurons (DG)", "17 Ex. Neurons (CA2/3)", "23 Oligodendrocytes", "34 Ex. Neurons (CA1)")
+##for microglia subclusters
+#celltypes <- c( "10 Microglia", "14 Microglia")
+
+options(future.globals.maxSize = 6 * 1024^3)  
+
+## DEG identification
+library(stringr)
+DEG.list.FDR2 <- NULL
+DEG.list.FDR<- NULL
+for (key in celltypes)  {
+Idents(obj) <- "cluster"
+subcelltype <- subset(obj, idents= key)
+Idents(subcelltype) <- "group"
+DEG.list <- FindMarkers(subcelltype, ident.1= "PE4", ident.2 ="PE4SYN", verbose = FALSE, test.use = "wilcox", logfc.threshold = 0.01)
+DEG.list$gene <- row.names(DEG.list)
+#DEG.list.FDR <- subset(DEG.list, DEG.list$p_val_adj< 0.05)
+DEG.list.FDR <- DEG.list
+DEG.list.FDR$dir<- ifelse(DEG.list.FDR$avg_log2 < 0, "neg","pos")
+DEG.list.FDR$celltype<- key
+DEG.list.FDR2<- rbind(DEG.list.FDR2, DEG.list.FDR)
+}
+table(DEG.list.FDR2$celltype)
+
+write.csv(DEG.list.FDR2, "MJK_PE4vsPE4SYN_cutoff01.csv")
+
+DEG.list.FDR2 <- NULL
+DEG.list.FDR<- NULL
+for (key in celltypes)  {
+Idents(obj) <- "cluster"
+subcelltype <- subset(obj, idents= key)
+Idents(subcelltype) <- "group"
+DEG.list <- FindMarkers(subcelltype, ident.1= "PNSE4", ident.2 ="PE4SYN", verbose = FALSE, test.use = "wilcox", logfc.threshold = 0.01)
+DEG.list$gene <- row.names(DEG.list)
+#DEG.list.FDR <- subset(DEG.list, DEG.list$p_val_adj< 0.05)
+DEG.list.FDR <- DEG.list
+DEG.list.FDR$dir<- ifelse(DEG.list.FDR$avg_log2 < 0, "neg","pos")
+DEG.list.FDR$celltype<- key
+DEG.list.FDR2<- rbind(DEG.list.FDR2, DEG.list.FDR)
+}
+table(DEG.list.FDR2$celltype)
+
+write.csv(DEG.list.FDR2, "MJK_PNSE4vsPE4SYN_cutoff01.csv")
+
+
+
+## DEG between clusters of the same cell type
+options(future.globals.maxSize = 36 * 1024^3) 
+Idents(obj) <- "Seurat_Clusters"
+DEG.list <- FindMarkers(obj, ident.1= "7", ident.2 = c("2", "3"), verbose = FALSE, test.use = "wilcox", logfc.threshold = 0.1)
+DEG.list$gene <- row.names(DEG.list)
+DEG.list.FDR <- DEG.list
+DEG.list.FDR$dir<- ifelse(DEG.list.FDR$avg_log2 < 0, "neg","pos")
+DEG.list.FDR$comparison<- "7vs2and3"
+DEG.list.FDR2<- DEG.list.FDR
+
+Idents(obj) <- "Seurat_Clusters"
+DEG.list <- FindMarkers(obj, ident.1= "4", ident.2 = c("6", "9"), verbose = FALSE, test.use = "wilcox", logfc.threshold = 0.1)
+DEG.list$gene <- row.names(DEG.list)
+DEG.list.FDR <- DEG.list
+DEG.list.FDR$dir<- ifelse(DEG.list.FDR$avg_log2 < 0, "neg","pos")
+DEG.list.FDR$comparison<- "4vs6and9"
+
+DEG.list.FDR2<- rbind(DEG.list.FDR2, DEG.list.FDR)
+
+Idents(obj) <- "Seurat_Clusters"
+DEG.list <- FindMarkers(obj, ident.1= "11", ident.2 = c("1", "20"), verbose = FALSE, test.use = "wilcox", logfc.threshold = 0.1)
+DEG.list$gene <- row.names(DEG.list)
+DEG.list.FDR <- DEG.list
+DEG.list.FDR$dir<- ifelse(DEG.list.FDR$avg_log2 < 0, "neg","pos")
+DEG.list.FDR$comparison<- "11vs1and20"
+
+DEG.list.FDR2<- rbind(DEG.list.FDR2, DEG.list.FDR)
+
+
+Idents(obj) <- "Seurat_Clusters"
+DEG.list <- FindMarkers(obj, ident.1= "17", ident.2 = c("8", "27"), verbose = FALSE, test.use = "wilcox", logfc.threshold = 0.1)
+DEG.list$gene <- row.names(DEG.list)
+DEG.list.FDR <- DEG.list
+DEG.list.FDR$dir<- ifelse(DEG.list.FDR$avg_log2 < 0, "neg","pos")
+DEG.list.FDR$comparison<- "17vs8and27"
+
+DEG.list.FDR2<- rbind(DEG.list.FDR2, DEG.list.FDR)
+table(DEG.list.FDR2$comparison)
+
+write.csv(DEG.list.FDR2, "MJK_NeuronE/MJK_cluster_to_clusters_DEGs.csv")
+
+
+
+
+
+###KEGG Enrichment Analysis of the enriched genes
+#this uses clusterProfiler::enrichKEGG() function
+#load the required packages
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(tidyr)
+
+## input DEGs
+DEGlist_all <- read.csv("MJK_PNSE4vsPE4SYN_cutoff01.csv")
+DEGlist_all$celltype <- as.character(DEGlist_all$celltype)
+DEGlist_all$Geneid <- DEGlist_all$gene
+## establish background
+background_genes_allclusters <- rownames(obj[rowSums(obj[]) > 0, ])
+background_genes <- background_genes_allclusters
+## identify cluster of interest
+celltypes <- c("4 Ex. Neurons (CA1)", "7 Oligodendrocytes", "11 Ex. Neurons (DG)", "17 Ex. Neurons (CA2/3)", "23 Oligodendrocytes", "34 Ex. Neurons (CA1)")
+
+for (celltype in celltypes) {
+## map DEGs
+DEGlist <- NULL
+DEGlist <- DEGlist_all[DEGlist_all$celltype == celltype, ]
+
+entrezIDs_signif <- AnnotationDbi::select(
+  org.Mm.eg.db, 
+  keys = as.character(DEGlist$Geneid),
+  columns = c("ENTREZID", "SYMBOL"),
+  keytype = "SYMBOL")
+
+entrezIDs_signif <- entrezIDs_signif %>% distinct(SYMBOL, .keep_all = TRUE)
+entrezIDs_signif <- entrezIDs_signif[!is.na(entrezIDs_signif$ENTREZID), ]
+entrezIDs_signif <- entrezIDs_signif[!duplicated(entrezIDs_signif$SYMBOL), ]
+
+## input background genes
+entrezIDs <- AnnotationDbi::select(
+  org.Mm.eg.db, 
+  keys = as.character(background_genes),  # no $ operator
+  columns = c("ENTREZID", "SYMBOL"),
+  keytype = "SYMBOL"
+)
+
+#KEGG analysis
+  #------------------------------
+  ekeggbp <- enrichKEGG(
+    gene     = entrezIDs_signif$ENTREZID %>% subset(., !is.na(.)),
+    universe = entrezIDs$ENTREZID %>% subset(., !is.na(.)),
+    organism    = "mmu",
+    minGSSize = 10,
+    pvalueCutoff = 0.05,
+    keyType = "ncbi-geneid"
+    )
+  
+  #translating gene IDs to human readable symbols
+  ekeggbp <- setReadable(ekeggbp, OrgDb = org.Mm.eg.db, keyType="ENTREZID")
+
+  ekeggbp@result <- ekeggbp@result[!is.na(ekeggbp@result$Description) & ekeggbp@result$Description != "", ]
+  
+# Save dotplot
+pdf(paste0("MJK_PNSE4vsPE4SYN/", celltype, "_ekegg-dot.pdf"), height = 8)
+print(dotplot(ekeggbp, showCategory = 20, orderBy = "GeneRatio"))
+dev.off()
+
+# Save emapplot
+x2 <- enrichplot::pairwise_termsim(ekeggbp)
+pdf(paste0("MJK_PNSE4vsPE4SYN/", celltype, "_ekegg-emap.pdf"), height = 8)
+print(emapplot(x2, showCategory = 40))
+dev.off()
+
+write.csv(ekeggbp, file = paste0("MJK_PNSE4vsPE4SYN/", celltype,"_ekegg.csv"))
+}
+
